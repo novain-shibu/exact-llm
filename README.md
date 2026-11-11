@@ -38,7 +38,12 @@ Both sides used `torch.compile` and one CUDA graph per decode step, in the same 
 | model | exact (group-128, custom exact int8 GEMV) | float16 (same-harness implementation) | ratio |
 |---|---|---|---|
 | Qwen2.5-0.5B | **153.0 tok/s** | 147.3 tok/s | 1.04× |
-| Qwen2.5-1.5B | **62.7 tok/s** | 49.8 tok/s | **1.26×** |
+| Qwen2.5-1.5B, run 1 | **62.7 tok/s** | 49.8 tok/s | 1.26× |
+| Qwen2.5-1.5B, run 2 (separate Kaggle session) | **66.2 tok/s** | 62.3 tok/s | 1.06× |
+| Qwen2.5-7B | **19.3 tok/s** (11.2 GB) | does not fit in the T4's memory | — |
+
+The float16 baseline varied between the two sessions (49.8 vs 62.3 tok/s), so the honest 1.5B result is **1.06–1.26×**: exact decoding at
+least matched float16 in every run.
 
 Exact decoding is at least as fast here because int8 weights are half the bytes of float16 and decoding is memory-bound. The step that
 made this possible: an unfused exact step launched 26,656 tiny GPU kernels per token, and fusing them gave 3× the speed with identical bits.
