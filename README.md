@@ -87,7 +87,7 @@ spot-check timing and the cheat-detection rates are from spec v0.2.
 - **tritify** (Pelloran, [arXiv 2611.13730](https://arxiv.org/abs/2611.13730)): exact-integer runtime, CPU vs GPU bit-identity,
   106B MoE across machines; no speed claim. Leads on scale.
 - **samebit** ([GitHub](https://github.com/Shakhtar-Sankur/samebit)): integer-only spec on Qwen2.5-0.5B with five independent backends
-  and ARM CI; uses the same float64 exactness bound; reports 11× slower than fp16 on a T4.
+  and ARM CI; uses the same float64 exactness bound; reports 11× slower than fp16 on a T4 for a 256-token prompt.
 - **bitexact-llm** ([GitHub](https://github.com/mynotwo/bitexact-llm)): integer Llama-3.2-1B, identity across devices, batch and KV
   cache; vLLM plugin.
 - **int-llm** ([GitHub](https://github.com/nmicic/int-llm)): integer TinyLlama, bit-identical from servers to microcontrollers.
