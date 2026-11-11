@@ -1,4 +1,4 @@
-# Exact Model Release — spec v0.1 (2026-11-11)
+# Exact Model Release — spec v0.4 (2026-11-11)
 
 Goal: a model release whose outputs are defined **to the bit**, so every honest implementation on any hardware
 returns identical logits, and anyone can verify a provider with one replayed request.
@@ -11,17 +11,17 @@ An exact release = `weights.int8` + `scales.int` + `tables.int` + `manifest.json
 - Tables (exp, SiLU, RoPE cos/sin) ship as integer arrays. They are never recomputed from libm, because transcendental
   functions differ in the last bit across platforms.
 
-## 2. Numeric program (v0 = what passed BC1 on Qwen2.5-0.5B)
+## 2. Numeric program (v0.4)
 | op | definition |
 |---|---|
 | activations | int64, Q16 fixed point |
-| linear | per row: shift `s = max(bitlen(max\|x\|) - 15, 0)`, `xq = round_shift(x, s)` (int16); `acc = Σ xq·w` exactly (int8 weights); `y = round_shift(acc · M_c, 28 - s)` + bias(Q16) |
+| linear | weights int8 with integer scale M per output column (per-channel) or per 128-row group per column (group-128: `y = round_shift(Σ_g acc_g·M_g, 28 − s)`); per row: shift `s = max(bitlen(max\|x\|) - 15, 0)`, `xq = round_shift(x, s)` (int16); `acc = Σ xq·w` exactly (int8 weights); `y = round_shift(acc · M_c, 28 - s)` + bias(Q16) |
 | round_shift(a, n) | `(a + 2^(n-1)) >> n` (arithmetic shift, round half up); n ≤ 0 means left shift |
 | RMSNorm | `k = max(bitlen(max\|x\|) - 24, 0)`, `xs = round_shift(x, k)`, `ms = Σxs² // D + 1`, `r = isqrt(ms)` (floor), `y = (x << 16) // (r << k)`, then `round_shift(y·g, 16)` |
 | RoPE | `round_shift(x·cos + rotate_half(x)·sin, 16)`, cos/sin = Q16 shipped tables |
 | scores | q, k row-quantised as in linear; `acc = q·kᵀ`; `score = round_shift(acc · C, 32 - s_q - s_k)` with integer `C = round(2^16 / √d_head)` (never a fractional shift) |
 | softmax | `d = max - score`; exp via shipped Q24 table at 1/256 steps with linear interpolation; `p = (e << 20) // Σe` (Q20) |
-| p·V | V quantised per head (one shift); `out = round_shift(p·vq, 20 - s_v)` |
+| p·V | V kept as Q16 integers (no shared shift, so it is causal); `out = round_shift(p·v, 20)` computed exactly in int64 (no length cap) |
 | SiLU | shipped Q16 table on [-16, 16) at 1/256 steps, interpolated; identity above 16, 0 below -16 |
 | logits | int64 Q16, the conformance output |
 

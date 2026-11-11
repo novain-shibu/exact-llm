@@ -1,4 +1,4 @@
-"""exact_llm - bit-exact integer inference for Qwen2-family LLMs (spec v0.1, see SPEC.md).
+"""exact_llm - bit-exact integer inference for Qwen2-family LLMs (spec v0.4, see SPEC.md).
 
 Every reduction is an exact integer sum; every nonlinearity is a shipped integer table or integer arithmetic.
 Same weights + same tokens -> the same int64 logits on any conforming hardware (tested: x86 CPUs, NVIDIA T4 float64
@@ -173,8 +173,7 @@ class IntModel:
                 qq, sq = qrow(q[hh]); kk, sk = qrow(k[kh])
                 sc = shr(exact_mm(qq, kk.T) * INV, (F - sq - sk.T) + 16)
                 p = isoftmax(sc, valid)
-                sv = max(int(bitlen(np.array([np.abs(v[kh]).max()]))[0]) - 15, 0)
-                out[hh] = shr(exact_mm(p, shr(v[kh], sv)), 20 - sv)
+                out[hh] = shr(np.matmul(p.astype(np.int64), v[kh].astype(np.int64)), 20)   # spec v0.4: exact int64, no length cap
             x = x + L["o"](out.transpose(1, 0, 2).reshape(T, H * hd))
             m = irms(x, L["g2"])
             x = x + L["down"](shr(isilu(L["gate"](m)) * L["up"](m), F))
@@ -333,8 +332,7 @@ def _attn_mlp_full(m, L, x):
         qq, sq = qrow(q[hh]); kk, sk = qrow(k[kh])
         sc = shr(exact_mm(qq, kk.T) * INV, (F - sq - sk.T) + 16)
         p = isoftmax(sc, valid)
-        sv = max(int(bitlen(np.array([np.abs(v[kh]).max()]))[0]) - 15, 0)
-        out[hh] = shr(exact_mm(p, shr(v[kh], sv)), 20 - sv)
+        out[hh] = shr(np.matmul(p.astype(np.int64), v[kh].astype(np.int64)), 20)   # spec v0.4: exact int64, no length cap
     x = x + L["o"](out.transpose(1, 0, 2).reshape(T, H * hd))
     mm_ = irms(x, L["g2"])
     return x + L["down"](shr(isilu(L["gate"](mm_)) * L["up"](mm_), F))
@@ -354,8 +352,7 @@ def block_row(m, L, x, t):
         qq, sq = qrow(qt[hh]); kk, sk = qrow(k[kh])
         sc = shr(exact_mm(qq, kk.T) * INV, (F - sq - sk.T) + 16)
         p = isoftmax(sc, valid)
-        sv = max(int(bitlen(np.array([np.abs(v[kh]).max()]))[0]) - 15, 0)
-        out[hh] = shr(exact_mm(p, shr(v[kh], sv)), 20 - sv)
+        out[hh] = shr(np.matmul(p.astype(np.int64), v[kh].astype(np.int64)), 20)   # spec v0.4: exact int64, no length cap
     xt = x[t:t + 1] + L["o"](out.transpose(1, 0, 2).reshape(1, H * hd))
     mt = irms(xt, L["g2"])
     return (xt + L["down"](shr(isilu(L["gate"](mt)) * L["up"](mt), F)))[0]
