@@ -20,10 +20,15 @@ same bits.
 |---|---|---|---|
 | Qwen2.5-0.5B | +0.55% | **+0.14%** | +0.34% |
 | Qwen2.5-1.5B | +0.37% | **−0.07%** (within noise) | +0.33% |
-| Qwen2.5-7B | +0.42%¹ | not measured | not measured |
+| Qwen2.5-7B | +0.41%¹ | not measured | not measured |
 
-16 × 256 tokens (4 × 1,024 for long context). ¹ Against a float32 reference that matches HF fp32 to 1e-4 logits at 0.5B/1.5B; measured
-on spec v0.1. A v0.4 re-run is in progress.
+16 × 256 tokens (4 × 1,024 for long context). ¹ Against a float32 reference that matches HF fp32 to 1e-4 logits at 0.5B/1.5B. Spec v0.4
+(v0.1 gave +0.42%).
+
+**A model trained with ternary weights:** BitNet b1.58 2B4T (Microsoft's native 1.58-bit model) run as an exact integer program. Its
+ternary weights are used exactly as released; only the scales, norms, embeddings and output head are converted to integers. Perplexity
+26.38 vs HF float32 26.22 (+0.62%, 8 × 256 tokens), with the same hash across summation orders. CPU only so far (no GPU or speed run
+yet). Script: `experiments/bitnet_exact_kaggle.py`.
 
 ### Same bits everywhere
 Integer-logit SHA-256 hashes were identical:
@@ -63,7 +68,9 @@ static cache crashed in our tests, and vLLM / TensorRT-LLM were not tested. **Pr
 - **Portable LLM compression:** text compressed with one engine decompressed byte-exactly with a different engine. On a 4.5 KB sample
   that was 1.04 bits/byte vs xz 3.87. A float version could not decode (230 of 255 positions differed). A larger, fairer sample is in progress.
 
-The receipt, spot-check and cheat numbers were measured on spec v0.2. A v0.4 re-run is in progress.
+Re-run on spec v0.4 (0.5B): receipts passed every check (sampler total variation 0.012; the identical-text cheat was still
+caught), the one-request cheat check caught the 7-bit layer, and the spot-check passed 20/20 honest checks at 0.056 s each. The 7B
+spot-check timing and the cheat-detection rates are from spec v0.2.
 
 ## How it works (see [SPEC.md](SPEC.md))
 - **Linear layers:** per-row power-of-two quantisation of activations to int16, int8 weights with per-channel or per-group-128 integer
@@ -98,7 +105,7 @@ equally optimised float16 implementation, plus the verification tools above.
 ## Limits (read before citing)
 - **Speed:** only batch-1 decoding is measured; prefill is slower than float16; one GPU type (T4); no comparison with vLLM / TensorRT-LLM.
 - **Quality:** 4,096 evaluation tokens per model; perplexity only, no downstream benchmarks yet.
-- **Models:** Qwen2.5 dense 0.5B–7B. Mixture-of-experts models are not supported yet.
+- **Models:** Qwen2.5 dense 0.5B–7B, and BitNet b1.58 2B4T (CPU only, separate script). Mixture-of-experts models are not supported yet.
 - **Hardware:** no ARM, Apple or AMD runs yet.
 - **Verification:** needs fresh or secret challenges, because a provider could memorise public ones.
 - The speed path (custom CUDA kernel + graph) currently lives in `experiments/speed_fair_kaggle.py`, not yet in the library module.
@@ -112,7 +119,7 @@ equally optimised float16 implementation, plus the verification tools above.
   - a shared lookup-table constant;
   - a float32-vs-float64 weight-conversion mismatch;
   - a T4 cuBLASLt int8 failure at one row count (worked around by padding);
-  - BitNet scaling and RMSNorm-epsilon errors (BitNet experiment still in progress).
+  - BitNet scaling, RMSNorm-epsilon and int64-overflow errors (found by a layer-by-layer comparison with HF).
 - **An earlier speed claim, withdrawn:** "near float16" was measured against HF's slow eager float16. The table above is the fair version.
 
 ## Reproduce
