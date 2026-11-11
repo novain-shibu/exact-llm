@@ -88,8 +88,9 @@ spot-check timing and the cheat-detection rates are from spec v0.2.
   106B MoE across machines; no speed claim. Leads on scale.
 - **samebit** ([GitHub](https://github.com/Shakhtar-Sankur/samebit)): integer-only spec on Qwen2.5-0.5B with five independent backends
   and ARM CI; uses the same float64 exactness bound; reports 11× slower than fp16 on a T4 for a 256-token prompt.
-- **bitexact-llm** ([GitHub](https://github.com/mynotwo/bitexact-llm)): integer Llama-3.2-1B, identity across devices, batch and KV
-  cache; vLLM plugin.
+- **bitexact-llm** ([GitHub](https://github.com/mynotwo/bitexact-llm)): integer Llama-3.2-1B and Llama-3.1-8B, bit-identical across
+  H800, H100, L20, x86 and Apple M4 Pro, and across batch and KV cache. Its exact mode keeps the bf16 weights unchanged (mean logit
+  difference about 5e-5 from fp32); it has an int8 mode and a vLLM plugin, and measures speed against vLLM. Leads on quality.
 - **int-llm** ([GitHub](https://github.com/nmicic/int-llm)): integer TinyLlama, bit-identical from servers to microcontrollers.
 - **Cankaya, ICML 2026** ([arXiv 2606.00279](https://arxiv.org/abs/2606.00279)): bit-exact recomputation of *float* GPU inference by
   emulation, given the provider's kernel and batch information.
@@ -99,8 +100,8 @@ spot-check timing and the cheat-detection rates are from spec v0.2.
   **QuaRot** (Hadamard rotation), **Ozaki scheme** (limb splitting), **TOPLOC** and Moonshot's K2-Vendor-Verifier (statistical checks),
   and the Thinking Machines / vLLM / SGLang deterministic modes (same hardware only).
 
-What this repository adds, as far as we know: exact inference at float-level quality that is **measured** to decode at least as fast as an
-equally optimised float16 implementation, plus the verification tools above.
+What this repository adds, as far as we know: exact int8 inference at float-level quality that is **measured** to decode at least as fast
+as an equally optimised float16 implementation (our own, same harness; not yet compared with vLLM), plus the verification tools above.
 
 ## Limits (read before citing)
 - **Speed:** only batch-1 decoding is measured; prefill is slower than float16; one GPU type (T4); no comparison with vLLM / TensorRT-LLM.
