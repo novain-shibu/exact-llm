@@ -1,5 +1,7 @@
 # exact-llm: bit-exact LLM inference that is also fast
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24137508.svg)](https://doi.org/10.5281/zenodo.24137508)
+
 **Same model + same input → the same output bits on any machine, at float-level quality, decoding at least as fast as an
 equally optimised float16 implementation on the same GPU (batch 1, NVIDIA T4).**
 
@@ -121,5 +123,7 @@ equally optimised float16 implementation, plus the verification tools above.
 
 Built by Novain Shibu with AI assistance (Anthropic Claude) for code and analysis. All numbers come from the scripts in this repository,
 run on free Kaggle CPU and T4 machines. Models: Qwen2.5 (Apache-2.0); no model weights are redistributed.
+
+Cite: Shibu, N. (2026). *exact-llm: bit-exact LLM inference that is also fast* (v0.4.0). Zenodo. https://doi.org/10.5281/zenodo.24137508 (all versions: https://doi.org/10.5281/zenodo.24137507)
 
 License: Apache-2.0.
