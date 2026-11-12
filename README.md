@@ -7,7 +7,7 @@ on the same GPU: 0.88–1.10× of vLLM float16 (batch 1, NVIDIA T4).**
 
 **New: zero-leak verified inference.** A verifier that holds **no model weights** checks every operation of a served model exactly,
 attention included. It catches one changed weight out of 358 million, catches hidden data in sampled text, and can run in a web
-browser. Verification is measured on dense models up to 7B, on a native 1-bit model, and on a 14.3B-parameter mixture-of-experts
+browser. Verification is measured on dense models up to 14B, on a native 1-bit model, and on a 14.3B-parameter mixture-of-experts
 model (Qwen1.5-MoE-A2.7B, 2.7B active), where it also catches a token sent to the wrong expert.
 
 Floating-point sums give different low-order bits when they are added in a different order. That order changes with the
@@ -31,18 +31,20 @@ verifier that **holds no weights**:
 - attention, norms, softmax and the sampler are replayed exactly;
 - the sampling seed is fixed by the protocol: SHA-256(prompt ‖ verifier nonce).
 
-| | Qwen2.5-0.5B | Qwen2.5-1.5B | Qwen2.5-7B |
-|---|---|---|---|
-| verifier key vs int8 weights | 10.6 MB vs 358 MB | 18.1 MB vs 1.31 GB | **35.6 MB vs 7.07 GB (199×)** |
-| honest windows verified, logits identical | 4/4 | 4/4 | 4/4 |
-| forged accumulators (±1, +p) rejected | 40/40 | 40/40 | 40/40 |
-| model with one layer cut to 7 bits | rejected | rejected | rejected |
-| consistent fake attention (one layer/head) | 10/10 rejected | 10/10 | 10/10 |
-| fake post-attention output, 5 modes × first/last layer¹ | — | 10/10 rejected | 10/10 rejected |
-| hidden bits by token substitution / attacker's own seed | 10/10, 5/5 rejected | 10/10, 5/5 | 10/10, 5/5 |
+| | Qwen2.5-0.5B | Qwen2.5-1.5B | Qwen2.5-7B | Qwen2.5-14B² |
+|---|---|---|---|---|
+| verifier key vs int8 weights | 10.6 MB vs 358 MB | 18.1 MB vs 1.31 GB | 35.6 MB vs 7.07 GB (199×) | **62.0 MB vs 14.0 GB (226×)** |
+| honest windows verified, logits identical | 4/4 | 4/4 | 4/4 | 4/4 |
+| forged accumulators (±1, +p) rejected | 40/40 | 40/40 | 40/40 | 40/40 |
+| model with one layer cut to 7 bits | rejected | rejected | rejected | rejected |
+| consistent fake attention (one layer/head) | 10/10 rejected | 10/10 | 10/10 | 10/10 |
+| fake post-attention output, 5 modes × first/last layer¹ | — | 10/10 rejected | 10/10 rejected | 10/10 rejected |
+| hidden bits by token substitution / attacker's own seed | 10/10, 5/5 rejected | 10/10, 5/5 | 10/10, 5/5 | 10/10, 5/5 |
 
 ¹ The attack class that passes an audit-only verifier in CommitLLM's red-team notes (`docs/security/redteam_audit_only.md`). Their test
 used a toy 2-layer model in their harness, so this compares attack classes, not numbers.
+
+² 48-token windows; the verifier took 16 s per window against the prover's 90–98 s (numpy, CPU). The 14B integer model's perplexity was not measured.
 
 The degraded model was rejected although it changed **no** output token. Because only one token is valid at each position, the bound of
 arXiv 2511.02620 (Theorem 4.1) gives **0 bits per token** through the sampled tokens, against our verifier.

@@ -1,4 +1,4 @@
-# Usage: set ZL_MODEL=Qwen/Qwen2.5-0.5B | Qwen/Qwen2.5-1.5B | Qwen/Qwen2.5-7B (default in file: 1.5B); ZL_TINY=1 runs a random tiny model locally with no downloads.
+# Usage: set ZL_MODEL=Qwen/Qwen2.5-0.5B | Qwen/Qwen2.5-1.5B | Qwen/Qwen2.5-7B | Qwen/Qwen2.5-14B (default in file: 1.5B); ZL_TINY=1 runs a random tiny model locally with no downloads.
 """exact_llm - bit-exact integer inference for Qwen2-family LLMs (spec v0.4, see SPEC.md).
 
 Every reduction is an exact integer sum; every nonlinearity is a shipped integer table or integer arithmetic.
