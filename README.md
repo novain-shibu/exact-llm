@@ -103,9 +103,13 @@ forged accumulators, 5/5 fake attention and 5/5 hidden-bit substitutions.
   - Bit-exact float recomputation (Cankaya, ICML 2026).
   - Cross-device bit-exact engines: tritify, samebit, bitexact-llm, int-llm, and idemcore (closed engine, open hash verifier).
   - An integer model verified in a browser with its weights: ModelProof, a tiny MLP.
+  - A full proof of bit-exact integer LLM inference: Sable (arXiv 2611.14083, November 2026), a sumcheck argument with committed
+    weights, covering Qwen2.5-32B and Qwen3-30B-A3B. A CPU checks the proof in 19-56 s, and proving costs 41-50x the serving
+    compute. It checks the whole computation, where our audits check sampled cells.
 
-  What is new here, as far as we found, is zero-tolerance coverage of every operation including attention, with a weightless verifier,
-  measured on real models.
+  What is new here, as far as we found, is zero-tolerance checking of every operation including attention by a verifier that holds
+  no weights, at a server cost of +2.2% to +13.8%, with per-cell checks that take milliseconds and run in a browser, measured on real
+  models. Sable proves the whole computation at a much higher cost; the two approaches are complementary.
 
 Scripts:
 - `experiments/zero_leak_verify_kaggle.py`
