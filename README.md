@@ -1,9 +1,9 @@
-# exact-llm: bit-exact LLM inference that is also fast
+# exact-llm: bit-exact LLM inference at float16 decode speed
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24137508.svg)](https://doi.org/10.5281/zenodo.24137508)
 
-**Same model + same input → the same output bits on any machine, at float-level quality, decoding at least as fast as an
-equally optimised float16 implementation on the same GPU (batch 1, NVIDIA T4).**
+**Same model + same input → the same output bits on any machine, at float-level quality, decoding at about the speed of float16
+on the same GPU: 0.88–1.10× of vLLM float16 (batch 1, NVIDIA T4).**
 
 Floating-point sums give different low-order bits when they are added in a different order. That order changes with the
 hardware, kernel, batch and thread count. So today two honest servers return different numbers for the same request, nobody can
@@ -44,19 +44,32 @@ Both sides used `torch.compile` and one CUDA graph per decode step, in the same 
 
 | model | exact (group-128, custom exact int8 GEMV) | float16 (same-harness implementation) | ratio |
 |---|---|---|---|
-| Qwen2.5-0.5B | **153.0 tok/s** | 147.3 tok/s | 1.04× |
-| Qwen2.5-1.5B, run 1 | **62.7 tok/s** | 49.8 tok/s | 1.26× |
-| Qwen2.5-1.5B, run 2 (separate Kaggle session) | **66.2 tok/s** | 62.3 tok/s | 1.06× |
-| Qwen2.5-7B | **19.3 tok/s** (11.2 GB) | does not fit in the T4's memory | — |
+| Qwen2.5-0.5B, session 1 | 153.0 tok/s | 147.3 tok/s | 1.04× |
+| Qwen2.5-0.5B, session 2 | 141.4 tok/s | 147.5 tok/s | 0.96× |
+| Qwen2.5-0.5B, session 3 | 148.5 tok/s | 153.5 tok/s | 0.97× |
+| Qwen2.5-1.5B, session 1 | 62.7 tok/s | 49.8 tok/s | 1.26× |
+| Qwen2.5-1.5B, session 2 | 66.2 tok/s | 62.3 tok/s | 1.06× |
+| Qwen2.5-1.5B, session 3 | 59.8 tok/s | 49.7 tok/s | 1.20× |
+| Qwen2.5-1.5B, session 4 | 64.4 tok/s | 60.6 tok/s | 1.06× |
+| Qwen2.5-7B | 19.3 tok/s (11.2 GB) | does not fit in the T4's memory | — |
 
-The float16 baseline varied between the two sessions (49.8 vs 62.3 tok/s), so the honest 1.5B result is **1.06–1.26×**: exact decoding at
-least matched float16 in every run.
+Each session is a separate Kaggle T4. Across sessions: **0.96–1.04×** at 0.5B (parity) and **1.06–1.26×** at 1.5B.
 
-Exact decoding is at least as fast here because int8 weights are half the bytes of float16 and decoding is memory-bound. The step that
+**Against vLLM** (v0.33.0, float16, CUDA graphs on, same T4 session and prompt tokens as session 3 / session 4 above):
+
+| model | exact | vLLM float16 | exact / vLLM |
+|---|---|---|---|
+| Qwen2.5-0.5B | 148.5 tok/s | 169.0 tok/s | 0.88× |
+| Qwen2.5-1.5B | 64.4 tok/s | 58.7 tok/s | 1.10× |
+
+vLLM's decode rate is 31 / (time for 32 new tokens − time for 1), median of 5. Our own float16 harness ran at 0.91× and 1.03× of vLLM.
+
+Exact decoding keeps up because int8 weights are half the bytes of float16 and batch-1 decoding is memory-bound. The step that
 made this possible: an unfused exact step launched 26,656 tiny GPU kernels per token, and fusing them gave 3× the speed with identical bits.
 
-**Scope:** batch-1 decoding on one older GPU, compared against our own float16 implementation under identical optimisation. HF's compiled
-static cache crashed in our tests, and vLLM / TensorRT-LLM were not tested. **Prompt processing (prefill) is still 3–5× slower than float16.**
+**Scope:** batch-1 decoding on one older GPU. Batched serving, where vLLM is strongest, was not measured; TensorRT-LLM was not tested.
+**Prompt processing (prefill) is still 3–5× slower than float16.** A T4 test of `torch._int_mm` (int8 tensor cores) ran at 0.44–0.65× of
+float16 matmul speed at prompt shapes, so that route to faster prefill does not work on this GPU.
 
 ### Applications built on exactness
 - **One-request provider check:** a provider that cuts one layer to 7 bits (+0.07% perplexity) changes the output hash on the first
@@ -65,8 +78,9 @@ static cache crashed in our tests, and vLLM / TensorRT-LLM were not tested. **Pr
   plus a hash chain over every step's logits. A cheating model whose sampled **text was identical** to the honest one was still rejected.
 - **Spot-check (expensive prover, cheap verifier):** the verifier recomputes one random block at one position. That took 1.1 s on a CPU
   for 7B (a full forward pass takes 77.6 s), and it caught a one-layer cheat whenever that layer was picked, with 0 false alarms.
-- **Portable LLM compression:** text compressed with one engine decompressed byte-exactly with a different engine. On a 4.5 KB sample
-  that was 1.04 bits/byte vs xz 3.87. A float version could not decode (230 of 255 positions differed). A larger, fairer sample is in progress.
+- **Portable LLM compression:** text compressed with one engine decompressed byte-exactly with a different engine. On 61 KB of
+  WikiText-2 (15,360 tokens) that was 1.06 bits/byte vs bz2 2.62, xz 2.74 and gzip 2.95. A float version could not decode (230 of 255
+  positions differed in a 4.5 KB test). Compression is slow: it runs the model once per token.
 
 Re-run on spec v0.4 (0.5B): receipts passed every check (sampler total variation 0.012; the identical-text cheat was still
 caught), the one-request cheat check caught the 7-bit layer, and the spot-check passed 20/20 honest checks at 0.056 s each. The 7B
@@ -100,11 +114,11 @@ spot-check timing and the cheat-detection rates are from spec v0.2.
   **QuaRot** (Hadamard rotation), **Ozaki scheme** (limb splitting), **TOPLOC** and Moonshot's K2-Vendor-Verifier (statistical checks),
   and the Thinking Machines / vLLM / SGLang deterministic modes (same hardware only).
 
-What this repository adds, as far as we know: exact int8 inference at float-level quality that is **measured** to decode at least as fast
-as an equally optimised float16 implementation (our own, same harness; not yet compared with vLLM), plus the verification tools above.
+What this repository adds, as far as we know: exact int8 inference at float-level quality that is **measured** to decode at about float16 speed
+(0.96–1.26× of our own same-harness float16; 0.88–1.10× of vLLM float16; batch 1, T4), plus the verification tools above.
 
 ## Limits (read before citing)
-- **Speed:** only batch-1 decoding is measured; prefill is slower than float16; one GPU type (T4); no comparison with vLLM / TensorRT-LLM.
+- **Speed:** only batch-1 decoding is measured; prefill is slower than float16; one GPU type (T4); vLLM compared at batch 1 only; no TensorRT-LLM comparison.
 - **Quality:** 4,096 evaluation tokens per model; perplexity only, no downstream benchmarks yet.
 - **Models:** Qwen2.5 dense 0.5B–7B, and BitNet b1.58 2B4T (CPU only, separate script). Mixture-of-experts models are not supported yet.
 - **Hardware:** no ARM, Apple or AMD runs yet.
