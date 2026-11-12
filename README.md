@@ -7,8 +7,8 @@ on the same GPU: 0.88–1.10× of vLLM float16 (batch 1, NVIDIA T4).**
 
 **New: zero-leak verified inference.** A verifier that holds **no model weights** checks every operation of a served model exactly,
 attention included. It catches one changed weight out of 358 million, catches hidden data in sampled text, and can run in a web
-browser. Verification is measured on dense models up to 7B and on a native 1-bit model. Exact inference also runs a 14.3B-parameter
-mixture-of-experts model (Qwen1.5-MoE-A2.7B, 2.7B active).
+browser. Verification is measured on dense models up to 7B, on a native 1-bit model, and on a 14.3B-parameter mixture-of-experts
+model (Qwen1.5-MoE-A2.7B, 2.7B active), where it also catches a token sent to the wrong expert.
 
 Floating-point sums give different low-order bits when they are added in a different order. That order changes with the
 hardware, kernel, batch and thread count. So today two honest servers return different numbers for the same request, nobody can
@@ -77,6 +77,11 @@ agreements ask for ("is the deployed model the evaluated one?"), done in softwar
 **Mixture-of-experts:** Qwen1.5-MoE-A2.7B (14.3B parameters, 60 experts, top-4 + shared expert) runs as an exact integer program (integer
 router with deterministic top-4, integer sigmoid gate) at **+0.35% perplexity** vs a float32 reference (8 × 256 tokens), with a stable hash.
 The integer and float routers pick the same top-4 expert set for 88–94% of tokens per layer.
+The weightless verifier covers this model as well (201 MB key vs 14.0 GB of int8 weights). It replays the integer router itself, so it knows
+which tokens each expert must have processed. Honest windows verified with identical logits (2/2), and it rejected 20/20 forged accumulators,
+5/5 fake attention, 5/5 hidden-bit substitutions and **5/5 forged routings** (one token at one layer sent to its 5th-best expert instead of
+its 4th, everything after it recomputed honestly). CommitLLM's roadmap lists MoE routing verification as planned (item 29); this is
+one model on a CPU, with 64-token windows and 5 trials per attack.
 
 **Native 1-bit model:** the same weightless verification on BitNet b1.58 2B4T (17.3 MB key) accepted honest runs and rejected 20/20
 forged accumulators, 5/5 fake attention and 5/5 hidden-bit substitutions.
@@ -107,6 +112,7 @@ Scripts:
 - `experiments/gpu_engine_trace_verify_kaggle.py`
 - `experiments/prover_commit_cost_gpu_kaggle.py`
 - `experiments/moe_exact_kaggle.py`
+- `experiments/moe_zero_leak_kaggle.py`
 - `experiments/bitnet_zero_leak_kaggle.py`
 - `experiments/vllm_batching_nondeterminism_kaggle.py`
 - `experiments/float_nondeterminism_hf_kaggle.py`
