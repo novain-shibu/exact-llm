@@ -85,7 +85,8 @@ def t_mm_f64(a, b):
 class TLin:
     def __init__(s, q, dev):
         s.dev = dev; s.K, s.N = q.w.shape
-        s.w8 = torch.from_numpy(np.ascontiguousarray(q.w)).to(dev)                     # int8 (K, N)
+        s.w8 = torch.from_numpy(np.ascontiguousarray(q.w.T)).to(dev).t()              # int8 (K, N) view, column-major storage:
+        # torch._int_mm is ~2-3x slower with a row-major rhs (pytorch/pytorch#165230); same bits (checked 2026-11-12, prefill_colmajor_kaggle.py)
         s.colsum = s.w8.long().sum(0)
         s.M = torch.from_numpy(q.M).to(dev); s.Mbits = q.Mbits
         s.b = None if q.b is None else torch.from_numpy(q.b).to(dev)

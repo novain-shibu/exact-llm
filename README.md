@@ -5,6 +5,11 @@
 **Same model + same input → the same output bits on any machine, at float-level quality, decoding at about the speed of float16
 on the same GPU: 0.88–1.10× of vLLM float16 (batch 1, NVIDIA T4).**
 
+**New: zero-leak verified inference.** A verifier that holds **no model weights** checks every operation of a served model exactly,
+attention included. It catches one changed weight out of 358 million, catches hidden data in sampled text, and can run in a web
+browser. Verification is measured on dense models up to 7B and on a native 1-bit model. Exact inference also runs a 14.3B-parameter
+mixture-of-experts model (Qwen1.5-MoE-A2.7B, 2.7B active).
+
 Floating-point sums give different low-order bits when they are added in a different order. That order changes with the
 hardware, kernel, batch and thread count. So today two honest servers return different numbers for the same request, nobody can
 re-check a provider's output, and a provider serving a quietly degraded model is hard to catch.
@@ -12,6 +17,99 @@ re-check a provider's output, and a provider serving a quietly degraded model is
 `exact-llm` defines the model as an **integer program**: int8 weights (with integer scales), integer activations, exact integer sums,
 and integer tables for the nonlinearities. Every summation order gives the same integer, so every conforming implementation gives the
 same bits.
+
+## Zero-leak verified inference (new, November 2026)
+A compromised inference server can hide data, for example stolen model weights, inside ordinary sampled text
+([arXiv 2511.02620](https://arxiv.org/abs/2511.02620)). A float verifier has to tolerate honest numerical noise, and that tolerance is the
+channel. We measured that noise in our test on a T4: with a fixed per-request seed, **6–22% of 64-token outputs from vLLM 0.33 changed
+only because of other requests in the same batch** (greedy decoding included). This is expected behaviour for batched float kernels, not a defect. In HF fp16, batch-1 / batch-8 / KV-cache runs **sampled different tokens at
+5.9–7.4% of positions**.
+
+With an integer model there is no honest noise: the output is a pure function of (weights, prompt, verifier nonce). On top of it we built a
+verifier that **holds no weights**:
+- a secret Freivalds key checks every linear layer (r·acc ≡ d·x mod p);
+- attention, norms, softmax and the sampler are replayed exactly;
+- the sampling seed is fixed by the protocol: SHA-256(prompt ‖ verifier nonce).
+
+| | Qwen2.5-0.5B | Qwen2.5-1.5B | Qwen2.5-7B |
+|---|---|---|---|
+| verifier key vs int8 weights | 10.6 MB vs 358 MB | 18.1 MB vs 1.31 GB | **35.6 MB vs 7.07 GB (199×)** |
+| honest windows verified, logits identical | 4/4 | 4/4 | 4/4 |
+| forged accumulators (±1, +p) rejected | 40/40 | 40/40 | 40/40 |
+| model with one layer cut to 7 bits | rejected | rejected | rejected |
+| consistent fake attention (one layer/head) | 10/10 rejected | 10/10 | 10/10 |
+| fake post-attention output, 5 modes × first/last layer¹ | — | 10/10 rejected | 10/10 rejected |
+| hidden bits by token substitution / attacker's own seed | 10/10, 5/5 rejected | 10/10, 5/5 | 10/10, 5/5 |
+
+¹ The attack class that passes an audit-only verifier in CommitLLM's red-team notes (`docs/security/redteam_audit_only.md`). Their test
+used a toy 2-layer model in their harness, so this compares attack classes, not numbers.
+
+The degraded model was rejected although it changed **no** output token. Because only one token is valid at each position, the bound of
+arXiv 2511.02620 (Theorem 4.1) gives **0 bits per token** through the sampled tokens, against our verifier.
+
+**Commit-and-audit** (Qwen2.5-0.5B): a full trace would be 3.65 MB per token. Instead, the prover sends a **32-byte Merkle root** per
+128-token window, and the verifier checks random (layer, position) cells.
+- Cached K/V rows are committed too, so a cell re-derives only its own row.
+- 40/40 honest cells verified, opening about 436 KB and taking 13 ms per cell.
+- At **7B**: a 32-byte root replaces a 790 MB trace per 64-token window; 40/40 honest cells verified, opening about 0.8 MB and taking 24 ms per cell; all attack gates pass.
+- A degraded layer and fake attention were caught in exactly the cells they touched.
+- A forged cached K row was rejected by the cell that owns it.
+- A substituted token was caught by the sampler check.
+- 20/20 lying openings were rejected.
+
+**In a web browser, without the model:** a JavaScript port of the verifier (exact BigInt arithmetic, Web Crypto SHA-256) checks real
+Qwen2.5-0.5B audit cells in 7–70 ms each and **Qwen2.5-7B** audit cells in 6–117 ms each, using only that layer's key slice and the
+prover's openings. It matched the Python verifier's verdict, and the failing step, on 8/8 honest and tampered cells for each model. Code: `webverify/`.
+
+**The fast GPU engine is verifiable too:** its trace (group-128 spec, Qwen2.5-0.5B, 64 tokens on a T4) verified on a CPU with a 27.5 MB
+weightless key; the verifier's logits equal the GPU's, and 20/20 single-entry tampers were rejected.
+
+**Server cost on a real GPU** (T4, the fast engine, batch-1 decode): the full commitment costs **+2.2% at 7B and +13.8% at 1.5B**, with
+identical outputs. That covers capturing every verified vector inside the CUDA graph, copying it to the host, and SHA-256 in 4 CPU threads.
+Capture and copy alone measured +4.1% / +7.1% (1.5B / 7B) in one session and +10.2% / +0.5% in another. With hashing on a single
+thread, 1.5B could not keep up (+47%).
+
+**Model identity without disclosure:** a verifier keyed on Qwen2.5-0.5B-Instruct (10.6 MB, no weights) accepted the declared model and
+rejected the base model swapped in. It also rejected the declared model with **one int8 weight changed by ±1 out of 357,826,560** in 10/10 trials,
+each time at the changed matrix, and one normalisation gain changed by about 1% (10/10). This is the check that verification proposals for AI
+agreements ask for ("is the deployed model the evaluated one?"), done in software.
+
+**Mixture-of-experts:** Qwen1.5-MoE-A2.7B (14.3B parameters, 60 experts, top-4 + shared expert) runs as an exact integer program (integer
+router with deterministic top-4, integer sigmoid gate) at **+0.35% perplexity** vs a float32 reference (8 × 256 tokens), with a stable hash.
+The integer and float routers pick the same top-4 expert set for 88–94% of tokens per layer.
+
+**Native 1-bit model:** the same weightless verification on BitNet b1.58 2B4T (17.3 MB key) accepted honest runs and rejected 20/20
+forged accumulators, 5/5 fake attention and 5/5 hidden-bit substitutions.
+
+**Limits:**
+- The integer model must be the one served; this does not cover existing float deployments.
+- Side channels (timing, length, refusals) and the choice of which messages are audited are out of scope, as in 2511.02620.
+- The numpy verifier still replays attention and norms (7.7 s vs 46 s for the prover per window at 7B).
+- The audit opening size grows with position.
+- The key is built from the weights once, so someone trusted must build it (for example the provider in a TEE, or an escrow).
+- Prior work:
+  - Freivalds checks (Slalom).
+  - Weightless commit-and-audit: CommitLLM, and verifiable-gemma (Gemma 4). Both verify with tolerances and list consistent fake
+    attention as open.
+  - The threat model, and its capacity bound: 2511.02620. A summary of it notes that deterministic inference would remove the
+    steganographic channel.
+  - Bit-exact float recomputation (Cankaya, ICML 2026).
+  - Cross-device bit-exact engines: tritify, samebit, bitexact-llm, int-llm, and idemcore (closed engine, open hash verifier).
+  - An integer model verified in a browser with its weights: ModelProof, a tiny MLP.
+
+  What is new here, as far as we found, is zero-tolerance coverage of every operation including attention, with a weightless verifier,
+  measured on real models.
+
+Scripts:
+- `experiments/zero_leak_verify_kaggle.py`
+- `experiments/commit_audit_kaggle.py`
+- `experiments/model_identity_kaggle.py`
+- `experiments/gpu_engine_trace_verify_kaggle.py`
+- `experiments/prover_commit_cost_gpu_kaggle.py`
+- `experiments/moe_exact_kaggle.py`
+- `experiments/bitnet_zero_leak_kaggle.py`
+- `experiments/vllm_batching_nondeterminism_kaggle.py`
+- `experiments/float_nondeterminism_hf_kaggle.py`
 
 ## Results (Qwen2.5, WikiText-2 test; all checks pre-registered before each run)
 
@@ -27,8 +125,9 @@ same bits.
 
 **A model trained with ternary weights:** BitNet b1.58 2B4T (Microsoft's native 1.58-bit model) run as an exact integer program. Its
 ternary weights are used exactly as released; only the scales, norms, embeddings and output head are converted to integers. Perplexity
-26.38 vs HF float32 26.22 (+0.62%, 8 × 256 tokens), with the same hash across summation orders. CPU only so far (no GPU or speed run
-yet). Script: `experiments/bitnet_exact_kaggle.py`.
+26.38 vs HF float32 26.22 (+0.62%, 8 × 256 tokens), with the same hash across summation orders. **The same hash (b571ee87…) on two
+different CPU machines and on an NVIDIA T4 (float64)**. No speed run yet. Scripts: `experiments/bitnet_exact_kaggle.py`,
+`experiments/bitnet_cross_device_kaggle.py`.
 
 ### Same bits everywhere
 Integer-logit SHA-256 hashes were identical:
@@ -68,11 +167,14 @@ Exact decoding keeps up because int8 weights are half the bytes of float16 and b
 made this possible: an unfused exact step launched 26,656 tiny GPU kernels per token, and fusing them gave 3× the speed with identical bits.
 
 **Scope:** batch-1 decoding on one older GPU. Batched serving, where vLLM is strongest, was not measured; TensorRT-LLM was not tested.
-**Prompt processing (prefill) is still 3–5× slower than float16** in the current code. Correction (2026-11-12): an earlier version of
-this README said int8 tensor cores (`torch._int_mm`) were slower than float16 matmul on the T4 (0.44–0.65×). That came from our weight
-layout: with a row-major weight matrix `_int_mm` is about 2–3× slower (see pytorch/pytorch#165230). With column-major int8 weights the same
-T4 test runs at **1.09–2.19× of float16 matmul speed** (1.42× at 256 prompt tokens for a Qwen2.5-1.5B layer), still exact. Faster exact
-prefill is being re-measured with this layout.
+**Prompt processing (prefill) is 2.65–2.8× slower than float16** (256 tokens, compiled, exact: 0.5B 0.112 s vs 0.040 s, 1.5B 0.198 s
+vs 0.075 s for HF fp16). It was 3.3–4.0× before switching the int8 weights to column-major in the same session. The rest of the gap is the
+small integer element-wise operations between the matrix products.
+
+Correction (2026-11-12): an earlier version of this README said int8 tensor cores (`torch._int_mm`) were slower than float16 matmul on the
+T4 (0.44–0.65×). That came from our weight layout: with a row-major weight matrix `_int_mm` is about 2–3× slower (see
+pytorch/pytorch#165230). With column-major int8 weights the same T4 test runs at **1.09–2.19× of float16 matmul speed** (1.42× at 256 prompt
+tokens for a Qwen2.5-1.5B layer), still exact.
 
 ### Applications built on exactness
 - **One-request provider check:** a provider that cuts one layer to 7 bits (+0.07% perplexity) changes the output hash on the first
@@ -123,7 +225,7 @@ What this repository adds, as far as we know: exact int8 inference at float-leve
 ## Limits (read before citing)
 - **Speed:** only batch-1 decoding is measured; prefill is slower than float16; one GPU type (T4); vLLM compared at batch 1 only; no TensorRT-LLM comparison.
 - **Quality:** 4,096 evaluation tokens per model; perplexity only, no downstream benchmarks yet.
-- **Models:** Qwen2.5 dense 0.5B–7B, and BitNet b1.58 2B4T (CPU only, separate script). Mixture-of-experts models are not supported yet.
+- **Models:** Qwen2.5 dense 0.5B–7B, BitNet b1.58 2B4T, and Qwen1.5-MoE-A2.7B (CPU reference; no MoE speed run yet).
 - **Hardware:** no ARM, Apple or AMD runs yet.
 - **Verification:** needs fresh or secret challenges, because a provider could memorise public ones.
 - The speed path (custom CUDA kernel + graph) currently lives in `experiments/speed_fair_kaggle.py`, not yet in the library module.
@@ -147,8 +249,9 @@ What this repository adds, as far as we know: exact int8 inference at float-leve
   `PREFLIGHT=1`. `reproduce_kaggle.py` rebuilds the core numbers on a fresh machine.
 
 Built by Novain Shibu with AI assistance (Anthropic Claude) for code and analysis. All numbers come from the scripts in this repository,
-run on free Kaggle CPU and T4 machines. Models: Qwen2.5 (Apache-2.0); no model weights are redistributed.
+run on free Kaggle CPU and T4 machines. Models: Qwen2.5 (Apache-2.0), BitNet b1.58 2B4T (MIT), Qwen1.5-MoE-A2.7B (Tongyi Qianwen license, research use); no model weights are redistributed.
 
-Cite: Shibu, N. (2026). *exact-llm: bit-exact LLM inference that is also fast* (v0.4.0). Zenodo. https://doi.org/10.5281/zenodo.24137508 (all versions: https://doi.org/10.5281/zenodo.24137507)
+Cite: Shibu, N. (2026). *exact-llm: bit-exact LLM inference at float16 decode speed, with zero-leak verification* (v0.5.0). Zenodo.
+https://doi.org/10.5281/zenodo.24137507 (all versions; v0.4.0: https://doi.org/10.5281/zenodo.24137508)
 
 License: Apache-2.0.

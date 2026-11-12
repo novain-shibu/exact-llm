@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weightless Verifier Test</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --ok: #1b7f3b; --bad: #b42318; --line: #ddd; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #16181c; --fg: #e8e8e8; --muted: #9a9a9a; --ok: #5cc98a; --bad: #f07a6e; --line: #333; } }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; }
+  table { border-collapse: collapse; width: 100%; max-width: 980px; } td, th { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; } .muted { color: var(--muted); }
+</style></head>
+<body>
+<h1>Weightless verifier: browser vs Python</h1>
+<p class="muted">Each audited cell is checked in this browser with exact BigInt arithmetic: Freivalds digests instead of weights, exact replay of
+attention, norms and lookup tables, and Merkle proofs. "agree" means the browser reached the same verdict as the Python verifier.</p>
+<p id="status">Running…</p>
+<table id="t"><thead><tr><th>case</th><th>cell (layer, position)</th><th>browser</th><th>python</th><th>agree</th><th>ms</th></tr></thead><tbody></tbody></table>
+<script src="verifier.js"></script>
+<script>
+runAll(new URLSearchParams(location.search).get("f") || "cells_tiny.json").then((rows) => {
+  window.RESULTS = rows; const tb = document.querySelector("#t tbody");
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${r.label}</td><td>${r.cell}</td><td class="${r.js_ok ? "ok" : "bad"}">${r.js_ok ? "PASS" : "REJECT"}${r.js_reason ? " (" + r.js_reason + ")" : ""}</td>` +
+      `<td>${r.python_ok ? "PASS" : "REJECT"}</td><td class="${r.agree ? "ok" : "bad"}">${r.agree ? "yes" : "NO"}</td><td>${r.ms}</td>`;
+    tb.appendChild(tr);
+  }
+  const n = rows.filter((r) => r.agree).length;
+  document.getElementById("status").textContent = `${n} / ${rows.length} verdicts agree with Python.`;
+}).catch((e) => { document.getElementById("status").textContent = "Error: " + e; window.RESULTS = { error: String(e) }; });
+</script>
+</body></html>
