@@ -68,8 +68,11 @@ Exact decoding keeps up because int8 weights are half the bytes of float16 and b
 made this possible: an unfused exact step launched 26,656 tiny GPU kernels per token, and fusing them gave 3× the speed with identical bits.
 
 **Scope:** batch-1 decoding on one older GPU. Batched serving, where vLLM is strongest, was not measured; TensorRT-LLM was not tested.
-**Prompt processing (prefill) is still 3–5× slower than float16.** A T4 test of `torch._int_mm` (int8 tensor cores) ran at 0.44–0.65× of
-float16 matmul speed at prompt shapes, so that route to faster prefill does not work on this GPU.
+**Prompt processing (prefill) is still 3–5× slower than float16** in the current code. Correction (2026-11-12): an earlier version of
+this README said int8 tensor cores (`torch._int_mm`) were slower than float16 matmul on the T4 (0.44–0.65×). That came from our weight
+layout: with a row-major weight matrix `_int_mm` is about 2–3× slower (see pytorch/pytorch#165230). With column-major int8 weights the same
+T4 test runs at **1.09–2.19× of float16 matmul speed** (1.42× at 256 prompt tokens for a Qwen2.5-1.5B layer), still exact. Faster exact
+prefill is being re-measured with this layout.
 
 ### Applications built on exactness
 - **One-request provider check:** a provider that cuts one layer to 7 bits (+0.07% perplexity) changes the output hash on the first
