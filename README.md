@@ -44,7 +44,7 @@ verifier that **holds no weights**:
 ¹ The attack class that passes an audit-only verifier in CommitLLM's red-team notes (`docs/security/redteam_audit_only.md`). Their test
 used a toy 2-layer model in their harness, so this compares attack classes, not numbers.
 
-² 48-token windows; the verifier took 16 s per window against the prover's 90–98 s (numpy, CPU). The 14B integer model's perplexity was not measured.
+² 48-token windows; the verifier took 16 s per window against the prover's 90–98 s (numpy, CPU). The 14B integer model's perplexity: +0.50% vs a float32 reference (see Quality).
 
 The degraded model was rejected although it changed **no** output token. Because only one token is valid at each position, the bound of
 arXiv 2511.02620 (Theorem 4.1) gives **0 bits per token** through the sampled tokens, against our verifier.
@@ -119,6 +119,8 @@ Scripts:
 - `experiments/prover_commit_cost_gpu_kaggle.py`
 - `experiments/moe_exact_kaggle.py`
 - `experiments/moe_zero_leak_kaggle.py`
+- `experiments/perplexity_14b_kaggle.py`
+- `experiments/perplexity_llama_family_kaggle.py`
 - `experiments/bitnet_zero_leak_kaggle.py`
 - `experiments/vllm_batching_nondeterminism_kaggle.py`
 - `experiments/float_nondeterminism_hf_kaggle.py`
@@ -131,8 +133,11 @@ Scripts:
 | Qwen2.5-0.5B | +0.55% | **+0.14%** | +0.34% |
 | Qwen2.5-1.5B | +0.37% | **−0.07%** (within noise) | +0.33% |
 | Qwen2.5-7B | +0.41%¹ | not measured | not measured |
+| Qwen2.5-14B | +0.50%² | not measured | not measured |
+| SmolLM2-1.7B (Llama architecture) | +0.53% | not measured | not measured |
 
-16 × 256 tokens (4 × 1,024 for long context). ¹ Against a float32 reference that matches HF fp32 to 1e-4 logits at 0.5B/1.5B. Spec v0.4
+16 × 256 tokens (4 × 1,024 for long context; 8 × 256 for 14B). ² Against a streamed float32 reference; the HF bf16 cross-check did not fit
+in CPU memory at 14B. SmolLM2-1.7B shows exactness is not specific to Qwen (no q/k/v bias; reference vs HF −0.05%). ¹ Against a float32 reference that matches HF fp32 to 1e-4 logits at 0.5B/1.5B. Spec v0.4
 (v0.1 gave +0.42%).
 
 **A model trained with ternary weights:** BitNet b1.58 2B4T (Microsoft's native 1.58-bit model) run as an exact integer program. Its
@@ -151,7 +156,8 @@ Integer-logit SHA-256 hashes were identical:
 Ordinary float32 and HF fp32 inference changed bits across summation orders, thread counts, and CPU vs GPU in the same runs.
 
 ### Decode speed (NVIDIA T4, batch 1, 32 tokens after a 64-token prompt)
-Both sides used `torch.compile` and one CUDA graph per decode step, in the same harness:
+**Implementation-level comparison** (same harness, not a serving engine): both sides used `torch.compile` and one CUDA graph per decode
+step. Exact rate = 32 / time of 32 graph decode steps after a 64-token prefill, median of 3.
 
 | model | exact (group-128, custom exact int8 GEMV) | float16 (same-harness implementation) | ratio |
 |---|---|---|---|
@@ -166,7 +172,8 @@ Both sides used `torch.compile` and one CUDA graph per decode step, in the same 
 
 Each session is a separate Kaggle T4. Across sessions: **0.96–1.04×** at 0.5B (parity) and **1.06–1.26×** at 1.5B.
 
-**Against vLLM** (v0.33.0, float16, CUDA graphs on, same T4 session and prompt tokens as session 3 / session 4 above):
+**Serving-engine comparison, against vLLM** (v0.33.0 with torch 2.14.0+cu130; float16, CUDA graphs on, max_model_len 512, greedy,
+ignore_eos; same T4 session and prompt tokens as session 3 / session 4 above):
 
 | model | exact | vLLM float16 | exact / vLLM |
 |---|---|---|---|
@@ -174,13 +181,16 @@ Each session is a separate Kaggle T4. Across sessions: **0.96–1.04×** at 0.5B
 | Qwen2.5-1.5B | 64.4 tok/s | 58.7 tok/s | 1.10× |
 
 vLLM's decode rate is 31 / (time for 32 new tokens − time for 1), median of 5. Our own float16 harness ran at 0.91× and 1.03× of vLLM.
+The two comparisons use different timing boundaries, so they are kept separate. Only medians were saved; raw repetitions will be
+published with the next re-run. Full settings: `THREAT_MODEL.md` (last section) and `experiments/speed_vs_vllm_kaggle.py`.
 
 Exact decoding keeps up because int8 weights are half the bytes of float16 and batch-1 decoding is memory-bound. The step that
 made this possible: an unfused exact step launched 26,656 tiny GPU kernels per token, and fusing them gave 3× the speed with identical bits.
 
 **Scope:** batch-1 decoding on one older GPU. Batched serving, where vLLM is strongest, was not measured; TensorRT-LLM was not tested.
-**Prompt processing (prefill) is 2.65–2.8× slower than float16** (256 tokens, compiled, exact: 0.5B 0.112 s vs 0.040 s, 1.5B 0.198 s
-vs 0.075 s for HF fp16). It was 3.3–4.0× before switching the int8 weights to column-major in the same session. The rest of the gap is the
+**Prompt processing (prefill) is 2.65–2.8× slower than HF float16 eager** (256 tokens, compiled, exact: 0.5B 0.112 s vs 0.040 s, 1.5B
+0.198 s vs 0.075 s), and **3.45–3.6× slower when float16 is also compiled with CUDA graphs** (a later T4 session: exact 0.072 s / 0.145 s vs
+float16 0.020 s / 0.042 s; CUDA graphs did not speed up exact prefill). It was 3.3–4.0× before switching the int8 weights to column-major in the same session. The rest of the gap is the
 small integer element-wise operations between the matrix products.
 
 Correction (2026-11-12): an earlier version of this README said int8 tensor cores (`torch._int_mm`) were slower than float16 matmul on the
@@ -189,6 +199,10 @@ pytorch/pytorch#165230). With column-major int8 weights the same T4 test runs at
 tokens for a Qwen2.5-1.5B layer), still exact.
 
 ### Applications built on exactness
+The security contract of each tool (what it claims, what it assumes, when commitments and challenges happen, and what it does not
+guarantee) is in [`THREAT_MODEL.md`](THREAT_MODEL.md). In short: a one-request check needs a fresh or secret challenge; a receipt is
+evidence for recomputation, not a standalone proof; spot checks and audits need the provider's commitment before an unpredictable challenge.
+
 - **One-request provider check:** a provider that cuts one layer to 7 bits (+0.07% perplexity) changes the output hash on the first
   request. A statistical next-token comparison would need about 3,000 tokens.
 - **Receipts for sampled text:** an integer RNG plus an integer sampler make sampling exact. A receipt is the prompt, seed and tokens,
